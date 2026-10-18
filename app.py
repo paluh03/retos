@@ -2,12 +2,14 @@ import streamlit as st
 import random
 import json
 import os
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Proyecto Ataraxia | WoW TDAH System", page_icon="⚔️", layout="centered")
 
 SAVE_FILE = "ataraxia_save.json"
+PERU_TZ = ZoneInfo("America/Lima")
 
 # --- BASE DE DATOS DEL SISTEMA ---
 RANKS = [
@@ -90,27 +92,38 @@ DAILY_REWARDS = [
     "🛌 Pase de Sueño Táctico: Siesta de 25 min en la tarde o dormir 45 min antes hoy."
 ]
 
-# --- FUNCIONES DE PERSISTENCIA Y LÓGICA ---
+# --- FUNCIONES DE PERSISTENCIA Y LÓGICA BLINDADAS ---
+def get_default_state():
+    return {
+        "ilvl": 0,
+        "last_date": "",
+        "daily_mod": "",
+        "daily_quest": "",
+        "daily_quest_type": "",
+        "daily_reward": "",
+        "completed_quest": False,
+        "completed_essalud": False,
+        "completed_omipro": False,
+        "rerolls_left": 1
+    }
+
 def load_data():
-    today_str = str(date.today())
-    if os.path.exists(SAVE_FILE):
-        with open(SAVE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        data = {
-            "ilvl": 0,
-            "last_date": "",
-            "daily_mod": "",
-            "daily_quest": "",
-            "daily_quest_type": "",
-            "daily_reward": "",
-            "completed_quest": False,
-            "completed_essalud": False,
-            "completed_omipro": False,
-            "rerolls_left": 1
-        }
+    today_str = str(datetime.now(PERU_TZ).date())
+    data = get_default_state()
     
-    if data["last_date"] != today_str:
+    if os.path.exists(SAVE_FILE):
+        try:
+            with open(SAVE_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    loaded = json.loads(content)
+                    if isinstance(loaded, dict):
+                        data.update(loaded)
+        except (json.JSONDecodeError, OSError):
+            # Si el archivo está vacío o corrupto, usa el estado base y lo sobrescribe abajo
+            pass
+    
+    if data["last_date"] != today_str or not data["daily_quest"]:
         roll_new_day(data, today_str)
     return data
 
@@ -121,7 +134,6 @@ def save_data(data):
 def roll_new_day(data, today_str):
     data["last_date"] = today_str
     data["daily_mod"] = random.choice(MODIFIERS_0M)
-    # Regla de exclusión: 65% reto de 30m en ruta, 35% reto de 1h fuera de ruta (NUNCA AMBOS)
     if random.random() < 0.65:
         data["daily_quest"] = random.choice(QUESTS_30M)
         data["daily_quest_type"] = "Reto de Ruta (30 min)"
@@ -149,7 +161,7 @@ data = load_data()
 current_rank, next_rank = get_current_rank(data["ilvl"])
 
 st.title("⚔️ Proyecto Ataraxia: Panel de Control")
-st.caption(f"Fecha Operativa: {data['last_date']} | Clase: Paladín Protección / Científico-Empresario")
+st.caption(f"Fecha Operativa (Perú): {data['last_date']} | Clase: Paladín Protección / Científico-Empresario")
 
 # --- FICHA DE PERSONAJE (GEARSCORE) ---
 st.subheader(f"👑 Título Actual: *{current_rank[1]}*")
@@ -230,7 +242,7 @@ st.subheader("🎁 Bóveda de Recompensas")
 if data["completed_quest"] or data["completed_essalud"]:
     st.success(f"**[BOTÍN DIARIO DESBLOQUEADO]:**\n\n### {data['daily_reward']}")
 else:
-    st.lock = st.error("🔒 **Botín Diario Bloqueado:** Completa el Reto del Día o tus 2 horas de Banco EsSalud para revelar y reclamar tu recompensa de hoy.")
+    st.error("🔒 **Botín Diario Bloqueado:** Completa el Reto del Día o tus 2 horas de Banco EsSalud para revelar y reclamar tu recompensa de hoy.")
 
 # --- LOGROS Y RECOMPENSAS DE RANGO ---
 with st.expander("🏆 Ver Recompensas de Hito Desbloqueadas (Logros de GearScore)"):
@@ -251,8 +263,11 @@ with st.sidebar:
     )
     uploaded_file = st.file_uploader("📂 Restaurar Partida (JSON)", type=["json"])
     if uploaded_file is not None:
-        restored_data = json.load(uploaded_file)
-        save_data(restored_data)
-        st.success("Partida actualizada. Recarga la página.")
-        if st.button("Aplicar Recarga"):
-            st.rerun()
+        try:
+            restored_data = json.load(uploaded_file)
+            save_data(restored_data)
+            st.success("Partida actualizada.")
+            if st.button("Aplicar Recarga"):
+                st.rerun()
+        except json.JSONDecodeError:
+            st.error("El archivo subido no es un JSON válido.")
